@@ -50,7 +50,7 @@ const Register = () => {
         {/* Left Sidebar */}
         <div className="p-6 py-8 text-white bg-blue-500 md:w-80 md:flex-shrink-0 flex flex-col items-center justify-center md:justify-evenly">
           <div className="my-3 text-4xl font-bold tracking-wider text-center">
-            <span>CloudShare</span>
+            <span>StackShare</span>
           </div>
           <p className="mt-6 font-normal text-center text-blue-100 text-sm">
             Secure file storage and sharing made simple. Upload, organize, and share your files with ease.

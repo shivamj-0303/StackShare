@@ -5,13 +5,14 @@ import { useAuth } from '../context/AuthContext';
 import FileUpload from './FileUpload';
 import FileDashboard from './FileDashboard';
 import { useState, useRef } from 'react';
-import { LogOut, Menu, User } from 'lucide-react';
+import { LogOut, User, ChevronDown } from 'lucide-react';
 
 const Dashboard = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const fileDashboardRef = useRef();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -30,32 +31,59 @@ const Dashboard = () => {
     <div className="min-h-screen bg-gray-100">
       {/* Top Navigation */}
       <nav className="bg-white border-b border-gray-200 sticky top-0 z-40">
-        <div className="px-8 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <Menu size={24} className="text-gray-600" />
+        <div className="px-6 md:px-8 py-4 flex justify-between items-center">
+          {/* Logo/Brand */}
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-xl text-gray-900">StackShare</span>
           </div>
-          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-2">
-              <User size={20} className="text-gray-600" />
-              <span className="text-sm text-gray-700 font-medium truncate max-w-xs">{currentUser?.email}</span>
-            </div>
+          
+          {/* User Profile Section */}
+          <div className="relative">
             <button
-              onClick={handleLogout}
-              className="w-10 h-10 bg-amber-400 rounded-full flex items-center justify-center hover:bg-amber-500 transition-colors"
-              title="Logout"
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              className="flex items-center gap-3 px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
-              <span className="text-white font-bold text-lg">👤</span>
+              <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center">
+                <User size={20} className="text-white" />
+              </div>
+              <div className="hidden sm:block text-left">
+                <p className="text-sm font-semibold text-gray-900">Account</p>
+                <p className="text-xs text-gray-600 truncate max-w-xs">{currentUser?.email}</p>
+              </div>
+              <ChevronDown size={18} className={`text-gray-600 transition-transform ${showProfileMenu ? 'rotate-180' : ''}`} />
             </button>
+
+            {/* Profile Dropdown Menu */}
+            {showProfileMenu && (
+              <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                <div className="px-4 py-3 border-b border-gray-200">
+                  <p className="text-sm font-semibold text-gray-900">Logged in as</p>
+                  <p className="text-xs text-gray-600 truncate">{currentUser?.email}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    handleLogout();
+                    setShowProfileMenu(false);
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 font-medium"
+                >
+                  <LogOut size={18} />
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </nav>
 
       {/* Main Content */}
-      <main className="px-8 py-8">
+      <main className="px-6 md:px-8 py-8">
         {/* Header Section */}
-        <div className="mb-12">
-          <p className="text-sm text-gray-600 font-medium mb-1">Welcome to</p>
-          <h1 className="text-5xl font-bold text-gray-900">File Manager</h1>
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <p className="text-sm text-gray-600 font-medium mb-1">Welcome to</p>
+            <h1 className="text-4xl md:text-5xl font-bold text-gray-900">File Manager</h1>
+          </div>
         </div>
 
         {/* Files Dashboard Section */}
