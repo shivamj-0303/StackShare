@@ -1,17 +1,16 @@
 import { useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { Upload, X, CheckCircle, AlertCircle, Folder, Camera, FileText, Music } from 'lucide-react';
+import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react';
 
 const FileUpload = ({ onUploadSuccess }) => {
   const { currentUser } = useAuth();
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState({});
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [dragActive, setDragActive] = useState(false);
-  const [uploadType, setUploadType] = useState(null);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -28,28 +27,34 @@ const FileUpload = ({ onUploadSuccess }) => {
     e.stopPropagation();
     setDragActive(false);
 
-    const droppedFile = e.dataTransfer.files?.[0];
-    if (droppedFile) {
-      setFile(droppedFile);
-      setError('');
-      setSuccess('');
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles && droppedFiles.length > 0) {
+      addFiles(Array.from(droppedFiles));
     }
   };
 
   const handleFileSelect = (e) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setError('');
-      setSuccess('');
+    const selectedFiles = e.target.files;
+    if (selectedFiles && selectedFiles.length > 0) {
+      addFiles(Array.from(selectedFiles));
     }
+  };
+
+  const addFiles = (newFiles) => {
+    setFiles([...files, ...newFiles]);
+    setError('');
+    setSuccess('');
+  };
+
+  const removeFile = (index) => {
+    setFiles(files.filter((_, i) => i !== index));
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
 
-    if (!file) {
-      setError('Please select a file');
+    if (files.length === 0) {
+      setError('Please select at least one file');
       return;
     }
 
@@ -59,70 +64,93 @@ const FileUpload = ({ onUploadSuccess }) => {
     }
 
     const maxSize = 50 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setError('File size exceeds 50MB limit');
+    const oversizedFiles = files.filter(f => f.size > maxSize);
+    if (oversizedFiles.length > 0) {
+      setError(`${oversizedFiles.length} file(s) exceed 50MB limit`);
       return;
     }
 
     setUploading(true);
-    setProgress(0);
     setError('');
 
+    let uploadedCount = 0;
+    const uploadedFiles = [];
+
     try {
-      const timestamp = Date.now();
-      const fileName = `${currentUser.uid}/${timestamp}-${file.name}`;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileId = `file-${i}`;
 
-      const { data, error: uploadError } = await supabase.storage
-        .from('StackShare-files')
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: false,
-          onUploadProgress: (progress) => {
-            const percentComplete = (progress.loaded / progress.total) * 100;
-            setProgress(Math.round(percentComplete));
-          },
-        });
+        try {
+          const timestamp = Date.now();
+          const fileName = `${currentUser.uid}/${timestamp}-${i}-${file.name}`;
 
-      if (uploadError) throw uploadError;
+          const { data, error: uploadError } = await supabase.storage
+            .from('StackShare-files')
+            .upload(fileName, file, {
+              cacheControl: '3600',
+              upsert: false,
+              onUploadProgress: (progressEvent) => {
+                const percentComplete = (progressEvent.loaded / progressEvent.total) * 100;
+                setProgress(prev => ({ ...prev, [fileId]: Math.round(percentComplete) }));
+              },
+            });
 
-      const { data: publicUrlData } = supabase.storage
-        .from('StackShare-files')
-        .getPublicUrl(fileName);
+          if (uploadError) throw uploadError;
 
-      const publicUrl = publicUrlData?.publicUrl;
+          const { data: publicUrlData } = supabase.storage
+            .from('StackShare-files')
+            .getPublicUrl(fileName);
 
-      const { data: insertData, error: dbError } = await supabase
-        .from('files')
-        .insert([
-          {
-            user_id: currentUser.uid,
-            file_name: file.name,
-            file_size: file.size,
-            file_type: file.mime_type || file.type,
-            storage_path: fileName,
-            public_url: publicUrl,
-          },
-        ])
-        .select();
+          const publicUrl = publicUrlData?.publicUrl;
 
-      if (dbError) throw dbError;
+          const { data: insertData, error: dbError } = await supabase
+            .from('files')
+            .insert([
+              {
+                user_id: currentUser.uid,
+                file_name: file.name,
+                file_size: file.size,
+                file_type: file.type || 'application/octet-stream',
+                storage_path: fileName,
+                public_url: publicUrl,
+              },
+            ])
+            .select();
 
-      setSuccess(
-        `File "${file.name}" uploaded successfully! Size: ${(file.size / 1024 / 1024).toFixed(2)}MB`
-      );
-      setFile(null);
-      setProgress(0);
-      setUploadType(null);
+          if (dbError) throw dbError;
+
+          uploadedFiles.push(insertData?.[0]);
+          uploadedCount++;
+        } catch (err) {
+          console.error(`Error uploading ${file.name}:`, err);
+        }
+      }
+
+      if (uploadedCount === files.length) {
+        setSuccess(
+          `All ${files.length} file(s) uploaded successfully!`
+        );
+      } else if (uploadedCount > 0) {
+        setSuccess(
+          `${uploadedCount} of ${files.length} file(s) uploaded successfully`
+        );
+      } else {
+        setError('Failed to upload files');
+      }
+
+      setFiles([]);
+      setProgress({});
 
       const fileInput = document.querySelector('input[type="file"]');
       if (fileInput) fileInput.value = '';
 
-      if (onUploadSuccess) {
-        onUploadSuccess(insertData?.[0]);
+      if (onUploadSuccess && uploadedFiles.length > 0) {
+        uploadedFiles.forEach(file => onUploadSuccess(file));
       }
     } catch (err) {
       console.error('Upload error:', err);
-      setError(err.message || 'Failed to upload file');
+      setError(err.message || 'Failed to upload files');
     } finally {
       setUploading(false);
     }
@@ -164,145 +192,150 @@ const FileUpload = ({ onUploadSuccess }) => {
         </div>
       )}
 
-      {!uploadType ? (
-        // File Type Selection
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <button
-            onClick={() => setUploadType('file')}
-            className="p-6 bg-white rounded-lg border border-gray-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group"
-          >
-            <div className="p-3 bg-gray-50 rounded-lg group-hover:bg-gray-100 transition-colors">
-              <Folder size={28} className="text-blue-600" />
-            </div>
-            <span className="font-semibold text-gray-900 text-sm">File</span>
-          </button>
-
-          <button
-            onClick={() => setUploadType('image')}
-            className="p-6 bg-white rounded-lg border border-gray-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group"
-          >
-            <div className="p-3 bg-gray-50 rounded-lg group-hover:bg-gray-100 transition-colors">
-              <Camera size={28} className="text-pink-600" />
-            </div>
-            <span className="font-semibold text-gray-900 text-sm">Photo</span>
-          </button>
-
-          <button
-            onClick={() => setUploadType('document')}
-            className="p-6 bg-white rounded-lg border border-gray-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group"
-          >
-            <div className="p-3 bg-gray-50 rounded-lg group-hover:bg-gray-100 transition-colors">
-              <FileText size={28} className="text-indigo-600" />
-            </div>
-            <span className="font-semibold text-gray-900 text-sm">Document</span>
-          </button>
-
-          <button
-            onClick={() => setUploadType('audio')}
-            className="p-6 bg-white rounded-lg border border-gray-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group"
-          >
-            <div className="p-3 bg-gray-50 rounded-lg group-hover:bg-gray-100 transition-colors">
-              <Music size={28} className="text-purple-600" />
-            </div>
-            <span className="font-semibold text-gray-900 text-sm">Audio</span>
-          </button>
-        </div>
-      ) : (
-        // Upload Form
-        <form onSubmit={handleUpload} className="space-y-4 bg-white rounded-lg border border-gray-200 p-8">
-          {/* Dropzone */}
-          <div
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-            className={`relative rounded-lg border-2 border-dashed transition-all p-12 cursor-pointer ${
-              dragActive
-                ? 'border-amber-400 bg-amber-50'
-                : 'border-gray-300 hover:border-amber-400 bg-gray-50 hover:bg-amber-50'
-            }`}
-          >
-            <input
-              type="file"
-              onChange={handleFileSelect}
-              disabled={uploading}
-              className="hidden"
-              id="file-input"
-            />
-            <label htmlFor="file-input" className="flex flex-col items-center justify-center gap-3">
-              <div
-                className={`p-4 rounded-full transition-all ${
-                  dragActive
-                    ? 'bg-amber-200'
-                    : 'bg-gray-200'
-                }`}
-              >
-                <Upload
-                  size={32}
-                  className={`transition-colors ${
-                    dragActive ? 'text-amber-700' : 'text-gray-600'
-                  }`}
-                />
-              </div>
-              <div className="text-center">
-                <p className="text-gray-900 font-semibold">
-                  {file ? file.name : 'Drop files here or click to upload'}
-                </p>
-                {file && (
-                  <p className="text-gray-600 text-sm mt-1">
-                    {(file.size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                )}
-                <p className="text-gray-500 text-xs mt-2">Max file size: 50 MB</p>
-              </div>
-            </label>
-          </div>
-
-          {/* Progress Bar */}
-          {uploading && (
-            <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <p className="text-gray-700 text-sm font-medium">Uploading...</p>
-                <p className="text-gray-600 text-sm">{progress}%</p>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-amber-400 h-full rounded-full transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                ></div>
-              </div>
-            </div>
-          )}
-
-          {/* Buttons */}
-          <div className="flex gap-3 pt-4">
-            <button
-              type="submit"
-              disabled={uploading || !file}
-              className={`flex-1 py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
-                uploading || !file
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-amber-400 text-gray-900 hover:bg-amber-500'
+      {/* Upload Form */}
+      <form onSubmit={handleUpload} className="space-y-4 bg-white rounded-lg border border-gray-200 p-8">
+        {/* Dropzone */}
+        <div
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          className={`relative rounded-lg border-2 border-dashed transition-all p-12 cursor-pointer ${
+            dragActive
+              ? 'border-amber-400 bg-amber-50'
+              : 'border-gray-300 hover:border-amber-400 bg-gray-50 hover:bg-amber-50'
+          }`}
+        >
+          <input
+            type="file"
+            onChange={handleFileSelect}
+            disabled={uploading}
+            className="hidden"
+            id="file-input"
+            multiple
+          />
+          <label htmlFor="file-input" className="flex flex-col items-center justify-center gap-3">
+            <div
+              className={`p-4 rounded-full transition-all ${
+                dragActive
+                  ? 'bg-amber-200'
+                  : 'bg-gray-200'
               }`}
             >
-              <Upload size={20} />
-              {uploading ? `Uploading (${progress}%)` : 'Upload File'}
-            </button>
+              <Upload
+                size={32}
+                className={`transition-colors ${
+                  dragActive ? 'text-amber-700' : 'text-gray-600'
+                }`}
+              />
+            </div>
+            <div className="text-center">
+              <p className="text-gray-900 font-semibold">
+                Drop files here or click to upload
+              </p>
+              <p className="text-gray-500 text-xs mt-2">Multiple files supported • Max 50 MB each</p>
+            </div>
+          </label>
+        </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setUploadType(null);
-                setFile(null);
-                setProgress(0);
-              }}
-              className="px-6 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Back
-            </button>
+        {/* Queued Files List */}
+        {files.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-gray-700 text-sm font-medium">
+              Queued Files ({files.length})
+            </p>
+            <div className="space-y-1 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
+              {files.map((file, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-2 bg-white rounded border border-gray-100 hover:border-gray-200"
+                >
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="p-1.5 bg-blue-50 rounded">
+                      <Upload size={16} className="text-blue-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-gray-900 text-sm truncate">{file.name}</p>
+                      <p className="text-gray-500 text-xs">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </div>
+                  </div>
+                  {!uploading && (
+                    <button
+                      type="button"
+                      onClick={() => removeFile(index)}
+                      className="ml-2 p-1 text-gray-400 hover:text-red-600 transition-colors"
+                      title="Remove file"
+                    >
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </form>
-      )}
+        )}
+
+        {/* Progress Bar - Per File */}
+        {uploading && files.length > 0 && (
+          <div className="space-y-3 border border-gray-200 rounded-lg p-3 bg-gray-50">
+            <p className="text-gray-700 text-sm font-medium">Uploading...</p>
+            {files.map((file, index) => (
+              <div key={index} className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <p className="text-gray-700 text-xs truncate flex-1">{file.name}</p>
+                  <p className="text-gray-600 text-xs ml-2 flex-shrink-0">
+                    {progress[`file-${index}`] || 0}%
+                  </p>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-amber-400 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${progress[`file-${index}`] || 0}%` }}
+                  ></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Buttons */}
+        <div className="flex gap-3 pt-4">
+          <button
+            type="submit"
+            disabled={uploading || files.length === 0}
+            className={`flex-1 py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+              uploading || files.length === 0
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-amber-400 text-gray-900 hover:bg-amber-500'
+            }`}
+          >
+            <Upload size={20} />
+            {uploading ? 'Uploading...' : `Upload ${files.length} File${files.length !== 1 ? 's' : ''}`}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setFiles([]);
+              setProgress({});
+              setError('');
+              setSuccess('');
+              const fileInput = document.querySelector('input[type="file"]');
+              if (fileInput) fileInput.value = '';
+            }}
+            disabled={uploading}
+            className={`px-6 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg transition-colors ${
+              uploading
+                ? 'text-gray-400 border-gray-200 cursor-not-allowed'
+                : 'hover:bg-gray-50'
+            }`}
+          >
+            Clear
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

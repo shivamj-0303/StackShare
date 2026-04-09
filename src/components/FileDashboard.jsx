@@ -23,6 +23,9 @@ import {
   Clock,
   FileUp,
   X,
+  Check,
+  Square,
+  Copy,
 } from 'lucide-react';
 
 const FileDashboard = ({ onUploadSuccess }) => {
@@ -37,6 +40,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
   const [sortBy, setSortBy] = useState('date'); // 'date' or 'name' or 'size'
+  const [selectedFiles, setSelectedFiles] = useState(new Set()); // Track selected file IDs
+  const [showBatchShareModal, setShowBatchShareModal] = useState(false);
+  const [batchShareLinks, setBatchShareLinks] = useState([]);
+  const [copiedLinkIndex, setCopiedLinkIndex] = useState(null);
 
   useEffect(() => {
     fetchFiles();
@@ -158,6 +165,99 @@ const FileDashboard = ({ onUploadSuccess }) => {
     }
   };
 
+  const toggleSelectFile = (fileId) => {
+    const newSelected = new Set(selectedFiles);
+    if (newSelected.has(fileId)) {
+      newSelected.delete(fileId);
+    } else {
+      newSelected.add(fileId);
+    }
+    setSelectedFiles(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedFiles.size === filteredFiles.length) {
+      setSelectedFiles(new Set());
+    } else {
+      setSelectedFiles(new Set(filteredFiles.map(f => f.id)));
+    }
+  };
+
+  const handleBatchDownload = () => {
+    if (selectedFiles.size === 0) return;
+    
+    const filesToDownload = filteredFiles.filter(f => selectedFiles.has(f.id));
+    filesToDownload.forEach(file => {
+      setTimeout(() => {
+        window.open(file.public_url, '_blank');
+      }, 200);
+    });
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedFiles.size === 0) return;
+    if (!window.confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
+
+    try {
+      setDeleting('batch');
+      const filesToDelete = filteredFiles.filter(f => selectedFiles.has(f.id));
+
+      for (const file of filesToDelete) {
+        await supabase.storage.from('StackShare-files').remove([file.storage_path]);
+        await supabase.from('files').delete().eq('id', file.id);
+      }
+
+      setFiles(files.filter(f => !selectedFiles.has(f.id)));
+      setSelectedFiles(new Set());
+    } catch (err) {
+      console.error('Error deleting files:', err);
+      setError(`Failed to delete files: ${err.message}`);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleBatchShare = async () => {
+    if (selectedFiles.size === 0) return;
+
+    try {
+      const filesToShare = filteredFiles.filter(f => selectedFiles.has(f.id));
+      const links = filesToShare.map(f => ({
+        id: f.id,
+        name: f.file_name,
+        url: `${window.location.origin}/share/${f.id}`,
+      }));
+      setBatchShareLinks(links);
+      setShowBatchShareModal(true);
+    } catch (err) {
+      console.error('Error preparing share links:', err);
+      setError('Failed to prepare share links');
+    }
+  };
+
+  const copyShareLink = async (url, index) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedLinkIndex(index);
+      setTimeout(() => setCopiedLinkIndex(null), 2000);
+    } catch (err) {
+      console.error('Error copying link:', err);
+      setError('Failed to copy link');
+    }
+  };
+
+  const copyAllShareLinks = async () => {
+    try {
+      const allLinks = batchShareLinks.map(l => l.url).join('\n');
+      await navigator.clipboard.writeText(allLinks);
+      setCopiedLinkIndex('all');
+      setTimeout(() => setCopiedLinkIndex(null), 2000);
+    } catch (err) {
+      console.error('Error copying links:', err);
+      setError('Failed to copy links');
+    }
+  };
+
   // Filter and sort files
   const filteredFiles = files
     .filter(file => file.file_name.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -244,7 +344,7 @@ const FileDashboard = ({ onUploadSuccess }) => {
 
       {/* Search and Controls Bar - Always show if there are files */}
       {files.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             {/* Search Box */}
             <div className="flex-1 relative">
@@ -299,6 +399,53 @@ const FileDashboard = ({ onUploadSuccess }) => {
               </button>
             </div>
           </div>
+
+          {/* Batch Actions Bar - Show when files are selected */}
+          {selectedFiles.size > 0 && (
+            <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={toggleSelectAll}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  {selectedFiles.size === filteredFiles.length ? (
+                    <Check size={18} className="text-blue-600" />
+                  ) : (
+                    <Square size={18} className="text-gray-400" />
+                  )}
+                  {selectedFiles.size === filteredFiles.length ? 'Deselect All' : `${selectedFiles.size} Selected`}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleBatchDownload}
+                  disabled={deleting === 'batch'}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                >
+                  <Download size={16} />
+                  Download Selected
+                </button>
+
+                <button
+                  onClick={handleBatchShare}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  <Share2 size={16} />
+                  Share Selected
+                </button>
+
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={deleting === 'batch'}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-700 text-sm font-medium rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 size={16} />
+                  {deleting === 'batch' ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -328,14 +475,37 @@ const FileDashboard = ({ onUploadSuccess }) => {
           {filteredFiles.map((file) => (
             <div
               key={file.id}
-              className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-all group"
+              className={`rounded-lg shadow-sm border p-4 hover:shadow-md transition-all group cursor-pointer ${
+                selectedFiles.has(file.id)
+                  ? 'bg-blue-50 border-blue-300'
+                  : 'bg-white border-gray-200'
+              }`}
+              onClick={() => toggleSelectFile(file.id)}
             >
-              {/* File Icon */}
+              {/* Checkbox and File Icon */}
               <div className="flex items-center justify-between mb-3">
-                <div className="p-2 bg-gray-50 rounded-lg">{getFileIcon(file.file_type)}</div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelectFile(file.id);
+                    }}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  >
+                    {selectedFiles.has(file.id) ? (
+                      <Check size={18} className="text-blue-600" />
+                    ) : (
+                      <Square size={18} className="text-gray-400" />
+                    )}
+                  </button>
+                  <div className="p-2 bg-gray-50 rounded-lg">{getFileIcon(file.file_type)}</div>
+                </div>
                 <div className="relative">
                   <button
-                    onClick={() => setOpenMenu(openMenu === file.id ? null : file.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenMenu(openMenu === file.id ? null : file.id);
+                    }}
                     className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
                   >
                     <MoreVertical size={16} className="text-gray-600" />
@@ -345,7 +515,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                   {openMenu === file.id && (
                     <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
                       <button
-                        onClick={() => handleDownload(file.public_url)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownload(file.public_url);
+                        }}
                         className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 flex items-center gap-2 text-xs font-medium border-b border-gray-100"
                       >
                         <Download size={14} className="text-blue-600" />
@@ -353,7 +526,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                       </button>
 
                       <button
-                        onClick={() => handleShare(file.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleShare(file.id);
+                        }}
                         className={`w-full px-3 py-2 text-left flex items-center gap-2 text-xs font-medium border-b border-gray-100 ${
                           sharedFileId === file.id
                             ? 'bg-green-50 text-green-700'
@@ -374,7 +550,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                       </button>
 
                       <button
-                        onClick={() => handleDelete(file.id, file.storage_path, file.file_name)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(file.id, file.storage_path, file.file_name);
+                        }}
                         disabled={deleting === file.id}
                         className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 flex items-center gap-2 text-xs font-medium disabled:opacity-50"
                       >
@@ -409,6 +588,18 @@ const FileDashboard = ({ onUploadSuccess }) => {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
+                  <th className="px-4 py-3 text-left">
+                    <button
+                      onClick={toggleSelectAll}
+                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                    >
+                      {selectedFiles.size === filteredFiles.length && filteredFiles.length > 0 ? (
+                        <Check size={18} className="text-blue-600" />
+                      ) : (
+                        <Square size={18} className="text-gray-400" />
+                      )}
+                    </button>
+                  </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">File Name</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Size</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
@@ -417,7 +608,30 @@ const FileDashboard = ({ onUploadSuccess }) => {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {filteredFiles.map((file) => (
-                  <tr key={file.id} className="hover:bg-gray-50 transition-colors">
+                  <tr 
+                    key={file.id} 
+                    className={`cursor-pointer transition-colors ${
+                      selectedFiles.has(file.id) 
+                        ? 'bg-blue-50' 
+                        : 'hover:bg-gray-50'
+                    }`}
+                    onClick={() => toggleSelectFile(file.id)}
+                  >
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectFile(file.id);
+                        }}
+                        className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      >
+                        {selectedFiles.has(file.id) ? (
+                          <Check size={18} className="text-blue-600" />
+                        ) : (
+                          <Square size={18} className="text-gray-400" />
+                        )}
+                      </button>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         {getFileIcon(file.file_type)}
@@ -431,7 +645,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                     <td className="px-4 py-3">
                       <div className="relative">
                         <button
-                          onClick={() => setOpenMenu(openMenu === file.id ? null : file.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenu(openMenu === file.id ? null : file.id);
+                          }}
                           className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
                         >
                           <MoreVertical size={16} className="text-gray-600" />
@@ -441,7 +658,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                         {openMenu === file.id && (
                           <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
                             <button
-                              onClick={() => handleDownload(file.public_url)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownload(file.public_url);
+                              }}
                               className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 flex items-center gap-2 text-xs font-medium border-b border-gray-100"
                             >
                               <Download size={14} className="text-blue-600" />
@@ -449,7 +669,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                             </button>
 
                             <button
-                              onClick={() => handleShare(file.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleShare(file.id);
+                              }}
                               className={`w-full px-3 py-2 text-left flex items-center gap-2 text-xs font-medium border-b border-gray-100 ${
                                 sharedFileId === file.id
                                   ? 'bg-green-50 text-green-700'
@@ -470,7 +693,10 @@ const FileDashboard = ({ onUploadSuccess }) => {
                             </button>
 
                             <button
-                              onClick={() => handleDelete(file.id, file.storage_path, file.file_name)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(file.id, file.storage_path, file.file_name);
+                              }}
                               disabled={deleting === file.id}
                               className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 flex items-center gap-2 text-xs font-medium disabled:opacity-50"
                             >
@@ -510,6 +736,98 @@ const FileDashboard = ({ onUploadSuccess }) => {
                   fetchFiles(); // Refresh files after upload
                 }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Share Links Modal */}
+      {showBatchShareModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Share Files</h2>
+                <p className="text-gray-600 text-sm mt-1">{batchShareLinks.length} file(s) selected</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowBatchShareModal(false);
+                  setBatchShareLinks([]);
+                }}
+                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X size={24} className="text-gray-600" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Copy All Button */}
+              <button
+                onClick={copyAllShareLinks}
+                className={`w-full py-2 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                  copiedLinkIndex === 'all'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+              >
+                {copiedLinkIndex === 'all' ? (
+                  <>
+                    <CheckCircle size={18} />
+                    All Links Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy size={18} />
+                    Copy All Links
+                  </>
+                )}
+              </button>
+
+              {/* Individual File Links */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">Or copy individual links:</p>
+                {batchShareLinks.map((link, index) => (
+                  <div
+                    key={link.id}
+                    className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{link.name}</p>
+                      <p className="text-xs text-gray-600 truncate font-mono">{link.url}</p>
+                    </div>
+                    <button
+                      onClick={() => copyShareLink(link.url, index)}
+                      className={`flex-shrink-0 px-3 py-1.5 rounded text-sm font-medium transition-colors whitespace-nowrap ${
+                        copiedLinkIndex === index
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                      }`}
+                    >
+                      {copiedLinkIndex === index ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Info Message */}
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-xs text-blue-700">
+                  💡 Share the link with others to allow them to download the file. Each link works independently.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 p-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowBatchShareModal(false);
+                  setBatchShareLinks([]);
+                }}
+                className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
